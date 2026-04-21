@@ -1,3 +1,4 @@
+// fallback for local dev
 // Deterministic mock OHLC for Phase 1.
 //
 // Each ticker gets:

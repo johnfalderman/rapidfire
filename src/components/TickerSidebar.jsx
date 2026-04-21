@@ -1,15 +1,20 @@
-import { useEffect, useRef } from 'react'
-import { TICKERS, sixMonthChange } from '../lib/mockData.js'
+import { useEffect, useMemo, useRef } from 'react'
+import { sixMonthChangePct } from '../lib/series.js'
 
-// Precompute once. Mock data is deterministic so this is safe at module scope.
-const ROWS = TICKERS.map((t) => ({
-  symbol: t.symbol,
-  pct: sixMonthChange(t.symbol),
-}))
-
-export default function TickerSidebar({ selected, onSelect }) {
+export default function TickerSidebar({ symbols, data, selected, onSelect }) {
   const listRef = useRef(null)
   const itemRefs = useRef({})
+
+  // Compute % changes once per data/symbols update — cheap but enough rows
+  // that it's worth memoizing.
+  const rows = useMemo(
+    () =>
+      symbols.map((sym) => ({
+        symbol: sym,
+        pct: sixMonthChangePct(data[sym]?.bars ?? []),
+      })),
+    [symbols, data],
+  )
 
   // Auto-scroll the selected row into view (center-ish), e.g. on J/K nav.
   useEffect(() => {
@@ -30,7 +35,7 @@ export default function TickerSidebar({ selected, onSelect }) {
         ref={listRef}
         className="sidebar-scroll flex-1 overflow-y-auto py-1"
       >
-        {ROWS.map(({ symbol, pct }) => {
+        {rows.map(({ symbol, pct }) => {
           const active = symbol === selected
           const up = pct >= 0
           return (

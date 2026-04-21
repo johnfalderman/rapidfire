@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createChart, CrosshairMode } from 'lightweight-charts'
-import { getCandles, getTicker, sixMonthChange } from '../lib/mockData.js'
+import {
+  barsToCandles,
+  sixMonthBars,
+  sixMonthChangePct,
+} from '../lib/series.js'
 
 // Helpers for formatting numbers across the header / footer.
 const fmtPrice = (n) =>
@@ -14,11 +18,16 @@ const fmtPrice = (n) =>
 const fmtPct = (n) =>
   n == null || Number.isNaN(n) ? '—' : `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`
 
-export default function ChartPane({ symbol }) {
-  const ticker = getTicker(symbol)
-  const candles = useMemo(() => getCandles(symbol), [symbol])
+export default function ChartPane({ symbol, ticker }) {
+  const candles = useMemo(() => {
+    if (!ticker?.bars) return []
+    return barsToCandles(sixMonthBars(ticker.bars))
+  }, [ticker])
 
-  const pct = useMemo(() => sixMonthChange(symbol), [symbol])
+  const pct = useMemo(
+    () => sixMonthChangePct(ticker?.bars ?? []),
+    [ticker],
+  )
   const last = candles[candles.length - 1]
 
   // Hover OHLC from the crosshair — defaults to last candle when not hovered.
@@ -102,7 +111,7 @@ export default function ChartPane({ symbol }) {
       <header className="px-8 py-6 border-b border-zinc-800 flex items-baseline gap-6">
         <div className="flex items-baseline gap-3">
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-50">
-            {ticker?.symbol}
+            {symbol}
           </h1>
           <span className="text-sm text-zinc-400">{ticker?.name}</span>
         </div>
