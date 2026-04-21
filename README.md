@@ -1,7 +1,7 @@
 # Rapidfire
 
 Personal stock-charting web app. Phase 2: real market data from Polygon.io,
-cached in Netlify Blobs via a nightly scheduled function.
+cached in Netlify Blobs via a nightly scheduled background function.
 
 ## Stack
 
@@ -28,13 +28,16 @@ locally.
 ## Data pipeline
 
 ```
-Polygon /v2/aggs  →  refresh-data (cron 02:00 UTC)  →  Netlify Blobs  →  get-data  →  client
+Polygon /v2/aggs  →  refresh-data-background (cron, 3 batches)  →  Netlify Blobs  →  get-data  →  client
 ```
 
-- `netlify/functions/refresh-data.js` — walks the full S&P 100, calls Polygon
-  for the last 400 calendar days of daily bars, and writes the combined
-  result to Netlify Blobs as `sp100.json`. A 13-second sleep between calls
-  stays safely under Polygon's free-tier 5-req/min limit.
+- `netlify/functions/refresh-data-background.js` — scheduled background
+  function. Each invocation processes a batch of 40 S&P 100 tickers (400
+  calendar days of daily bars each), with a 13-second sleep between Polygon
+  calls to respect the free-tier 5-req/min limit. Progress is checkpointed
+  to Blobs under `sp100-progress` so the next run resumes where the prior
+  one stopped. Once all 101 tickers are fetched, the result is published to
+  `sp100` and the progress key is cleared.
 - `netlify/functions/get-data.js` — thin read-through endpoint. Returns
   `{ status: 'ok' | 'empty' | 'error', ... }`.
 - `src/data/tickers.js` — canonical S&P 100 list (symbol + name + sector).
@@ -43,9 +46,9 @@ Polygon /v2/aggs  →  refresh-data (cron 02:00 UTC)  →  Netlify Blobs  →  g
 
 Set on Netlify (Site settings → Environment variables):
 
-| Var               | Purpose                                   |
-| ----------------- | ----------------------------------------- |
-| `POLYGON_API_KEY` | Polygon.io API key used by `refresh-data` |
+| Var               | Purpose                                                |
+| ----------------- | ------------------------------------------------------ |
+| `POLYGON_API_KEY` | Polygon.io API key used by `refresh-data-background`   |
 
 For local runs of the functions: put the same key in a `.env` file or use
 `netlify env:set POLYGON_API_KEY ...`.
@@ -64,24 +67,31 @@ dev machine.
 
 ### First-time cache seeding
 
-The scheduled function runs every day at 02:00 UTC. After the first deploy
-the cache will be empty until the first run — trigger it manually to avoid
-waiting:
+The nightly cron runs `refresh-data-background` three times in a row
+(02:00, 03:00, 04:00 UTC) — each invocation handles one batch, so every
+night the whole index refreshes. After the first deploy the cache will be
+empty until the first full cycle completes.
 
-**Netlify UI:** Site → Functions → `refresh-data` → "Run now".
-
-**CLI:**
+To seed immediately, invoke the endpoint three times (wait ~9 min between
+each so the previous batch finishes):
 
 ```
-netlify functions:invoke refresh-data --no-identity
+curl -X POST https://<your-site>.netlify.app/.netlify/functions/refresh-data-background
 ```
 
-A full run takes roughly 22 minutes (101 tickers × 13 s/call). Watch
-function logs for Polygon 429s or per-ticker failures — failed symbols show
-up in the response body's `failed` array and quietly disappear from the
-sidebar.
+Or use the Netlify CLI:
 
-> **Timeout note:** Netlify's default scheduled-function timeout is shorter
-> than the full run. If the manual invoke keeps timing out, rename the file
-> to `refresh-data-background.js` (or upgrade the Polygon plan and drop
-> `DELAY_MS`) — background functions get 15 minutes.
+```
+netlify functions:invoke refresh-data-background --no-identity
+```
+
+Background functions return `202 Accepted` immediately and continue running
+server-side. Watch the Function log in the Netlify UI for per-ticker
+progress and a final `batch complete, cursor N/101` line.
+
+When the third batch finishes, logs will say
+`done: 101 tickers, 0 failed` and the site starts serving real data.
+
+> **Failed tickers** show up in the response body's `failed` array — they
+> render as empty-bar rows in the cache and are filtered out of the
+> sidebar. The next night's cron will retry them.
