@@ -7,6 +7,8 @@ import { tickers as TICKERS_META } from './data/tickers.js'
 import { sixMonthBars } from './lib/series.js'
 import { askClaude } from './lib/claude.js'
 import { computeSummaries } from './lib/summary.js'
+import { detectForQuery } from './lib/queryRouter.js'
+import { matchesToMarkers } from './lib/patternMarkers.js'
 
 export default function App() {
   // One fetch on load, held in memory for the rest of the session. The
@@ -100,6 +102,8 @@ export default function App() {
     answer: null,
     error: null,
     loading: false,
+    patternName: null,
+    matches: [],
   })
   const queryInputRef = useRef(null)
   const reqIdRef = useRef(0)
@@ -107,7 +111,14 @@ export default function App() {
   const clearQuery = useCallback(() => {
     // Bump the request id so any in-flight response is ignored.
     reqIdRef.current += 1
-    setQuery({ question: null, answer: null, error: null, loading: false })
+    setQuery({
+      question: null,
+      answer: null,
+      error: null,
+      loading: false,
+      patternName: null,
+      matches: [],
+    })
   }, [])
 
   const submitQuery = useCallback(
@@ -120,7 +131,21 @@ export default function App() {
       const fullBars = ticker.bars
       const myId = ++reqIdRef.current
 
-      setQuery({ question, answer: null, error: null, loading: true })
+      // Detection is local + cheap, so we run it before the round-trip
+      // and paint markers immediately. The user gets visual feedback
+      // while Claude is still composing its answer.
+      const detection = detectForQuery(question, fullBars)
+      const patternName = detection?.patternName ?? null
+      const matches = detection?.matches ?? []
+
+      setQuery({
+        question,
+        answer: null,
+        error: null,
+        loading: true,
+        patternName,
+        matches,
+      })
 
       try {
         const text = await askClaude({
@@ -131,20 +156,36 @@ export default function App() {
           bars,
           fullBars,
           summaries,
+          patternName,
+          patternMatches: patternName ? matches : null,
         })
         if (reqIdRef.current !== myId) return // user moved on
-        setQuery({ question, answer: text, error: null, loading: false })
+        setQuery((prev) => ({
+          ...prev,
+          answer: text,
+          error: null,
+          loading: false,
+        }))
       } catch (err) {
         if (reqIdRef.current !== myId) return
-        setQuery({
-          question,
+        setQuery((prev) => ({
+          ...prev,
           answer: null,
           error: err.message || 'Request failed',
           loading: false,
-        })
+        }))
       }
     },
     [selected, state.data, summaries],
+  )
+
+  // Markers recompute only when detection results change. Ticker
+  // switches clear the query entirely so the old matches (which
+  // reference indices from a different series) can't leak onto the
+  // new chart.
+  const markers = useMemo(
+    () => matchesToMarkers(query.patternName, query.matches),
+    [query.patternName, query.matches],
   )
 
   // Wrap setSelected so every ticker change clears any stale answer. We use
@@ -247,7 +288,11 @@ export default function App() {
         onSelect={selectTicker}
       />
       <div className="flex-1 min-w-0 flex flex-col h-full">
-        <ChartPane symbol={selected} ticker={state.data[selected]} />
+        <ChartPane
+          symbol={selected}
+          ticker={state.data[selected]}
+          markers={markers}
+        />
         <ResultPanel
           question={query.question}
           answer={query.answer}

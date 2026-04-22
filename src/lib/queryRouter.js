@@ -6,6 +6,8 @@
 //
 // Order matters inside each keyword list — the first hit wins, so
 // more specific phrases should come before generic ones.
+import { detectors } from './patterns.js'
+
 const patternKeywords = {
   detectGoldenCross: ['golden cross'],
   detectDeathCross: ['death cross'],
@@ -25,6 +27,21 @@ export function routeQuery(query) {
     if (keywords.some((k) => lower.includes(k))) return fn
   }
   return null
+}
+
+// Combined helper: route + run the detector. Single source of truth
+// so App.jsx (for markers) and claude.js (for the prompt payload) don't
+// each independently re-derive matches from the same query.
+//
+// Returns { patternName, matches } when a keyword hits, or null for
+// free-form queries. `matches` comes from the detector as-is — caller
+// is responsible for any sorting / truncation it needs.
+export function detectForQuery(query, fullBars) {
+  const patternName = routeQuery(query)
+  if (!patternName) return null
+  const detector = detectors[patternName]
+  if (!detector) return { patternName, matches: [] }
+  return { patternName, matches: detector(fullBars || []) }
 }
 
 // Exposed so tests (and future debugging UIs) can reuse the same map

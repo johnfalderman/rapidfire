@@ -18,7 +18,7 @@ const fmtPrice = (n) =>
 const fmtPct = (n) =>
   n == null || Number.isNaN(n) ? '—' : `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`
 
-export default function ChartPane({ symbol, ticker }) {
+export default function ChartPane({ symbol, ticker, markers }) {
   const candles = useMemo(() => {
     if (!ticker?.bars) return []
     return barsToCandles(sixMonthBars(ticker.bars))
@@ -102,6 +102,24 @@ export default function ChartPane({ symbol, ticker }) {
     }
     setHovered(null)
   }, [candles])
+
+  // Pattern markers. lightweight-charts wants them sorted ascending
+  // by time and matched to existing bar times — anything outside the
+  // visible 6-month slice is dropped silently so Phase 4 matches from
+  // >6 months ago just don't render. An empty array clears markers.
+  useEffect(() => {
+    if (!seriesRef.current) return
+    const series = seriesRef.current
+    if (!markers || markers.length === 0) {
+      series.setMarkers([])
+      return
+    }
+    const visible = new Set(candles.map((c) => c.time))
+    const filtered = markers
+      .filter((m) => visible.has(m.time))
+      .sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0))
+    series.setMarkers(filtered)
+  }, [markers, candles])
 
   const up = pct >= 0
 

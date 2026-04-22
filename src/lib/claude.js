@@ -1,15 +1,12 @@
 // Client-side wrapper around the claude-query Netlify function.
-// Two-path design as of Task 4:
-//   - Free-form path: ship the 6-month bar slice for open-ended
-//     questions Claude has to interpret from raw OHLC.
-//   - Pattern path: when routeQuery recognises a well-known pattern
-//     keyword ("hammer", "golden cross", "52-week high", …) we run
-//     the detector locally over the full bar series and send Claude
-//     just the matches. Saves tokens and is noticeably faster.
+// Two-path contract (detection happens in the caller now so App.jsx
+// can also render markers from the same match list):
+//   - Free-form path: ship the 6-month bar slice. Claude interprets
+//     raw OHLC.
+//   - Pattern path: caller passes patternName + patternMatches from
+//     detectForQuery(). We forward only the matches plus the most
+//     recent bar for price context — no raw bars needed.
 // The API key still lives exclusively on the server function.
-
-import { routeQuery } from './queryRouter.js'
-import { detectors } from './patterns.js'
 
 const ENDPOINT = '/.netlify/functions/claude-query'
 const TIMEOUT_MS = 20000
@@ -27,13 +24,12 @@ export async function askClaude({
   bars,
   fullBars,
   summaries,
+  patternName,
+  patternMatches,
 }) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
 
-  // Decide which path we're on before touching the network so errors
-  // from detectors surface immediately rather than after a round-trip.
-  const patternName = routeQuery(query)
   const body = buildRequestBody({
     query,
     ticker,
@@ -43,6 +39,7 @@ export async function askClaude({
     fullBars,
     summaries,
     patternName,
+    patternMatches,
   })
 
   let res
@@ -89,6 +86,7 @@ function buildRequestBody({
   fullBars,
   summaries,
   patternName,
+  patternMatches,
 }) {
   const base = {
     query,
@@ -100,28 +98,25 @@ function buildRequestBody({
 
   // Free-form path — unchanged from Task 3. The server still expects
   // `bars` to be the 6-month slice.
-  if (!patternName) {
+  if (!patternName || !Array.isArray(patternMatches)) {
     return { ...base, bars }
   }
 
-  // Pattern path — detect locally on the full series (golden cross
-  // and 52-week rules need >6 months) and ship only the matches.
-  const detector = detectors[patternName]
-  const series = Array.isArray(fullBars) && fullBars.length ? fullBars : bars
-  const allMatches = detector ? detector(series) : []
-
-  // Most recent first so the server can truncate without losing signal.
-  const recent = [...allMatches]
+  // Pattern path. Detection already ran in the caller; just sort and
+  // truncate. Most recent first so a server-side cap still keeps the
+  // signal users care about most.
+  const recent = [...patternMatches]
     .sort((a, b) => b.index - a.index)
     .slice(0, MAX_MATCHES_IN_PAYLOAD)
 
+  const series = Array.isArray(fullBars) && fullBars.length ? fullBars : bars
   const lastBar = series?.length ? series[series.length - 1] : null
 
   return {
     ...base,
     patternName,
     patternMatches: recent,
-    matchCount: allMatches.length,
+    matchCount: patternMatches.length,
     lastBar,
   }
 }
