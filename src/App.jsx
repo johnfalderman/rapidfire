@@ -6,6 +6,7 @@ import ResultPanel from './components/ResultPanel.jsx'
 import { tickers as TICKERS_META } from './data/tickers.js'
 import { sixMonthBars } from './lib/series.js'
 import { askClaude } from './lib/claude.js'
+import { computeSummaries } from './lib/summary.js'
 
 export default function App() {
   // One fetch on load, held in memory for the rest of the session. The
@@ -72,6 +73,14 @@ export default function App() {
     )
   }, [state.data])
 
+  // Cross-ticker context for Claude — computed once per data load and reused
+  // across every query so market-wide questions ("which sectors held up?")
+  // have the full list available without bloating the per-request payload.
+  const summaries = useMemo(
+    () => computeSummaries(state.data, symbols),
+    [state.data, symbols],
+  )
+
   const [selected, setSelected] = useState(null)
 
   // Default / recover selection whenever the symbol list changes.
@@ -117,6 +126,7 @@ export default function App() {
           name: ticker.name,
           sector: ticker.sector,
           bars,
+          summaries,
         })
         if (reqIdRef.current !== myId) return // user moved on
         setQuery({ question, answer: text, error: null, loading: false })
@@ -130,7 +140,7 @@ export default function App() {
         })
       }
     },
-    [selected, state.data],
+    [selected, state.data, summaries],
   )
 
   // Wrap setSelected so every ticker change clears any stale answer. We use

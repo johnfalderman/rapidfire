@@ -27,7 +27,7 @@ const QueryBar = forwardRef(function QueryBar(
         type="text"
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        placeholder="Ask Claude about this chart..."
+        placeholder="Ask Claude about this chart or the whole S&P 100..."
         disabled={disabled || loading}
         className={[
           'flex-1 bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2',

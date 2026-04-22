@@ -53,6 +53,12 @@ Set on Netlify (Site settings → Environment variables):
 | `POLYGON_API_KEY`   | Polygon.io API key used by `refresh-data-background`   |
 | `ANTHROPIC_API_KEY` | Anthropic API key used by `claude-query` (phase 3)     |
 
+The `claude-query` function receives two pieces of context per request: the
+focused ticker's full 6-month bars (for single-ticker deep dives) and a
+compact summary of all ~100 tickers (symbol, sector, last, 6M high/low,
+daily-return volatility) so market-wide questions ("which sectors are
+weakest?", "which names sit near their 6M lows?") can be answered too.
+
 For local runs of the functions: put the same key in a `.env` file or use
 `netlify env:set POLYGON_API_KEY ...`.
 

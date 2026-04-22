@@ -7,7 +7,7 @@ const ENDPOINT = '/.netlify/functions/claude-query'
 // headroom so slow networks don't surface as "ask Claude" errors.
 const TIMEOUT_MS = 20000
 
-export async function askClaude({ query, ticker, name, sector, bars }) {
+export async function askClaude({ query, ticker, name, sector, bars, summaries }) {
   // AbortController gives us a real cancel rather than leaving the request
   // dangling in the tab when we time out.
   const controller = new AbortController()
@@ -24,6 +24,7 @@ export async function askClaude({ query, ticker, name, sector, bars }) {
         tickerName: name,
         sector,
         bars,
+        summaries,
       }),
       signal: controller.signal,
     })
