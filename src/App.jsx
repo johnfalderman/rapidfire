@@ -115,6 +115,9 @@ export default function App() {
       if (!selected || !state.data?.[selected]) return
       const ticker = state.data[selected]
       const bars = sixMonthBars(ticker.bars)
+      // Full series is what pattern detectors need — 200-day SMAs and
+      // 52-week rules can't run on the 6-month slice alone.
+      const fullBars = ticker.bars
       const myId = ++reqIdRef.current
 
       setQuery({ question, answer: null, error: null, loading: true })
@@ -126,6 +129,7 @@ export default function App() {
           name: ticker.name,
           sector: ticker.sector,
           bars,
+          fullBars,
           summaries,
         })
         if (reqIdRef.current !== myId) return // user moved on

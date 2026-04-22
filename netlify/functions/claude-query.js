@@ -1,8 +1,13 @@
 import Anthropic from '@anthropic-ai/sdk'
 
 // Thin proxy so the Anthropic SDK (and our API key) stay server-side.
-// The client POSTs { query, ticker, tickerName, sector, bars } — `bars` is
-// already the 6-month compact slice the user sees on the chart.
+// Two payload shapes are accepted:
+//   - Free-form: { query, ticker, tickerName, sector, bars, summaries }
+//     (bars = 6-month compact slice)
+//   - Pattern:   { query, ticker, tickerName, sector, patternName,
+//                  patternMatches, matchCount, lastBar, summaries }
+// The pattern path skips shipping raw OHLC entirely — detection runs
+// on the client and we only send Claude the hits for interpretation.
 export default async (req) => {
   const jsonResponse = (status, body) =>
     new Response(JSON.stringify(body), {
@@ -21,10 +26,29 @@ export default async (req) => {
     return jsonResponse(400, { error: 'Invalid JSON body' })
   }
 
-  const { query, ticker, tickerName, sector, bars, summaries } = payload || {}
-  if (!query || !ticker || !Array.isArray(bars)) {
+  const {
+    query,
+    ticker,
+    tickerName,
+    sector,
+    bars,
+    summaries,
+    patternName,
+    patternMatches,
+    matchCount,
+    lastBar,
+  } = payload || {}
+
+  if (!query || !ticker) {
     return jsonResponse(400, {
-      error: 'Missing required fields: query, ticker, bars',
+      error: 'Missing required fields: query, ticker',
+    })
+  }
+
+  const isPatternPath = patternName && Array.isArray(patternMatches)
+  if (!isPatternPath && !Array.isArray(bars)) {
+    return jsonResponse(400, {
+      error: 'Missing required field: bars (free-form path)',
     })
   }
 
@@ -36,22 +60,26 @@ export default async (req) => {
 
   const systemPrompt = `You are a technical analysis assistant embedded
 in a charting tool. You help a professional investor understand what he's
-seeing across the S&P 100. You receive two pieces of context:
+seeing across the S&P 100. The user's question may arrive one of two ways:
 
-1. A FOCUSED TICKER — the one currently on screen — with 6 months of daily
-   bars. Bars are JSON objects with keys: t (date YYYY-MM-DD), o (open),
-   h (high), l (low), c (close), v (volume).
-2. A SUMMARIES array covering all ~100 tickers in the app. Each entry has:
-   symbol, name, sector, last (last close), high (6M high), low (6M low),
-   vol (daily-return std dev in percentage points, e.g. 1.5 ≈ ±1.5%/day).
+A. FREE-FORM — you get 6 months of daily bars for the focused ticker plus
+   an all-ticker summaries array. Bars use keys t, o, h, l, c, v. Summaries
+   entries have symbol, name, sector, last, high, low, vol (std dev of
+   daily returns in percentage points).
 
-Choose the right context for the question:
-- Single-ticker questions ("what happened to AAPL last month?") → rely on
-  the focused ticker's bars. Mention cross-ticker context only if asked.
-- Market-wide questions ("which sectors look weakest?", "which names are
-  pinned to their 6M lows?") → reason across the summaries. Name specific
-  tickers when useful.
-- Mixed ("how does NVDA's volatility compare to its sector?") → use both.
+B. PATTERN MATCHES — the client already ran a deterministic detector and
+   hands you the hits. You will see: patternName, patternMatches (each
+   with date, index, description, significance 0–1), total matchCount
+   across the full series, and the most recent bar for price context.
+   Trust the matches — do not re-derive them. Interpret them: are they
+   clustered, recent, strong (high significance), isolated? What might
+   that suggest about the ticker's tape?
+
+Choose context based on the question:
+- Single-ticker questions → rely on the focused ticker's data.
+- Market-wide questions ("which sectors look weakest?") → reason across
+  the summaries. Name specific tickers when useful.
+- Mixed → use both.
 
 Rules:
 - Describe, don't prescribe. No "buy", "sell", or "hold" recommendations.
@@ -61,24 +89,34 @@ Rules:
 - If the question is unanswerable from the data, say so.
 - End with: "Technical observation only, not financial advice."`
 
+  const userMessage = isPatternPath
+    ? buildPatternMessage({
+        query,
+        ticker,
+        tickerName,
+        sector,
+        patternName,
+        patternMatches,
+        matchCount,
+        lastBar,
+        summaries,
+      })
+    : buildFreeFormMessage({
+        query,
+        ticker,
+        tickerName,
+        sector,
+        bars,
+        summaries,
+      })
+
   try {
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
     const response = await client.messages.create({
       model: 'claude-sonnet-4-6',
       max_tokens: 500,
       system: systemPrompt,
-      messages: [
-        {
-          role: 'user',
-          content: `Focused ticker: ${ticker} (${tickerName}, ${sector})
-Last 6 months of daily OHLC for the focused ticker: ${JSON.stringify(bars)}
-
-All-ticker summaries (symbol, name, sector, last, 6M high, 6M low, vol%):
-${JSON.stringify(summaries ?? [])}
-
-Question: ${query}`,
-        },
-      ],
+      messages: [{ role: 'user', content: userMessage }],
     })
 
     // Anthropic returns an array of content blocks; for plain-text answers
@@ -93,4 +131,59 @@ Question: ${query}`,
       error: err?.message || 'Claude request failed',
     })
   }
+}
+
+function buildFreeFormMessage({
+  query,
+  ticker,
+  tickerName,
+  sector,
+  bars,
+  summaries,
+}) {
+  return `Focused ticker: ${ticker} (${tickerName}, ${sector})
+Last 6 months of daily OHLC for the focused ticker: ${JSON.stringify(bars)}
+
+All-ticker summaries (symbol, name, sector, last, 6M high, 6M low, vol%):
+${JSON.stringify(summaries ?? [])}
+
+Question: ${query}`
+}
+
+function buildPatternMessage({
+  query,
+  ticker,
+  tickerName,
+  sector,
+  patternName,
+  patternMatches,
+  matchCount,
+  lastBar,
+  summaries,
+}) {
+  const total = Number.isFinite(matchCount) ? matchCount : patternMatches.length
+  const shown = patternMatches.length
+  const truncatedNote =
+    total > shown
+      ? ` (showing ${shown} most recent of ${total} total)`
+      : ''
+
+  const matchesBlock = patternMatches.length
+    ? JSON.stringify(patternMatches)
+    : '[] — no matches found in the available history'
+
+  const lastBarBlock = lastBar
+    ? `Most recent bar: ${JSON.stringify(lastBar)}`
+    : 'Most recent bar: unavailable'
+
+  return `Focused ticker: ${ticker} (${tickerName}, ${sector})
+Pattern detector: ${patternName}${truncatedNote}
+Matches (date, index, description, significance 0–1):
+${matchesBlock}
+${lastBarBlock}
+
+All-ticker summaries (symbol, name, sector, last, 6M high, 6M low, vol%):
+${JSON.stringify(summaries ?? [])}
+
+Question: ${query}`
 }
