@@ -24,6 +24,8 @@ locally.
 ## Keyboard
 
 - `←` / `→` or `J` / `K` — previous / next ticker
+- `?` — focus the Claude query bar
+- `Esc` — dismiss the answer panel and unfocus the query bar
 
 ## Data pipeline
 
@@ -46,9 +48,10 @@ Polygon /v2/aggs  →  refresh-data-background (cron, 3 batches)  →  Netlify B
 
 Set on Netlify (Site settings → Environment variables):
 
-| Var               | Purpose                                                |
-| ----------------- | ------------------------------------------------------ |
-| `POLYGON_API_KEY` | Polygon.io API key used by `refresh-data-background`   |
+| Var                 | Purpose                                                |
+| ------------------- | ------------------------------------------------------ |
+| `POLYGON_API_KEY`   | Polygon.io API key used by `refresh-data-background`   |
+| `ANTHROPIC_API_KEY` | Anthropic API key used by `claude-query` (phase 3)     |
 
 For local runs of the functions: put the same key in a `.env` file or use
 `netlify env:set POLYGON_API_KEY ...`.

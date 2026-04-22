@@ -9,10 +9,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
     "@netlify/blobs": "^8.1.0",
     "lightweight-charts": "^4.2.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.0.1"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",

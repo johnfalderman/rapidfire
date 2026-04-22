@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import TickerSidebar from './components/TickerSidebar.jsx'
 import ChartPane from './components/ChartPane.jsx'
+import QueryBar from './components/QueryBar.jsx'
+import ResultPanel from './components/ResultPanel.jsx'
 import { tickers as TICKERS_META } from './data/tickers.js'
+import { sixMonthBars } from './lib/series.js'
+import { askClaude } from './lib/claude.js'
 
 export default function App() {
   // One fetch on load, held in memory for the rest of the session. The
@@ -78,6 +82,68 @@ export default function App() {
     }
   }, [symbols, selected])
 
+  // ---- Claude query state ----
+  // `question` is set the moment the user hits Enter; `answer`/`error` land
+  // asynchronously. An in-flight request identifier lets us ignore stale
+  // responses when the user switches ticker mid-request.
+  const [query, setQuery] = useState({
+    question: null,
+    answer: null,
+    error: null,
+    loading: false,
+  })
+  const queryInputRef = useRef(null)
+  const reqIdRef = useRef(0)
+
+  const clearQuery = useCallback(() => {
+    // Bump the request id so any in-flight response is ignored.
+    reqIdRef.current += 1
+    setQuery({ question: null, answer: null, error: null, loading: false })
+  }, [])
+
+  const submitQuery = useCallback(
+    async (question) => {
+      if (!selected || !state.data?.[selected]) return
+      const ticker = state.data[selected]
+      const bars = sixMonthBars(ticker.bars)
+      const myId = ++reqIdRef.current
+
+      setQuery({ question, answer: null, error: null, loading: true })
+
+      try {
+        const text = await askClaude({
+          query: question,
+          ticker: selected,
+          name: ticker.name,
+          sector: ticker.sector,
+          bars,
+        })
+        if (reqIdRef.current !== myId) return // user moved on
+        setQuery({ question, answer: text, error: null, loading: false })
+      } catch (err) {
+        if (reqIdRef.current !== myId) return
+        setQuery({
+          question,
+          answer: null,
+          error: err.message || 'Request failed',
+          loading: false,
+        })
+      }
+    },
+    [selected, state.data],
+  )
+
+  // Wrap setSelected so every ticker change clears any stale answer. We use
+  // the wrapped setter everywhere the user can change tickers (sidebar clicks
+  // and keyboard nav below).
+  const selectTicker = useCallback(
+    (sym) => {
+      setSelected(sym)
+      clearQuery()
+    },
+    [clearQuery],
+  )
+
   const step = useCallback(
     (delta) => {
       setSelected((curr) => {
@@ -87,22 +153,40 @@ export default function App() {
         const next = (i + delta + symbols.length) % symbols.length
         return symbols[next]
       })
+      clearQuery()
     },
-    [symbols],
+    [symbols, clearQuery],
   )
 
   useEffect(() => {
     const onKey = (e) => {
-      // Don't hijack keys while the user is typing somewhere.
       const t = e.target
-      if (
+      const typing =
         t &&
         (t.tagName === 'INPUT' ||
           t.tagName === 'TEXTAREA' ||
           t.isContentEditable)
-      ) {
+
+      // Esc always works — even while focused in the input — so the user can
+      // dismiss the panel and unfocus in one keystroke.
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        clearQuery()
+        if (queryInputRef.current) queryInputRef.current.blur()
         return
       }
+
+      // `?` focuses the query bar. Shift+/ on US layouts; also allow plain
+      // `?` for consistency. Skip while typing so we don't steal `?` from
+      // the user mid-question.
+      if (!typing && e.key === '?') {
+        e.preventDefault()
+        queryInputRef.current?.focus()
+        return
+      }
+
+      // Don't hijack nav keys while the user is typing.
+      if (typing) return
 
       switch (e.key) {
         case 'ArrowLeft':
@@ -123,7 +207,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [step])
+  }, [step, clearQuery])
 
   if (state.status === 'loading') {
     return <StatusScreen>Loading market data…</StatusScreen>
@@ -146,9 +230,22 @@ export default function App() {
         symbols={symbols}
         data={state.data}
         selected={selected}
-        onSelect={setSelected}
+        onSelect={selectTicker}
       />
-      <ChartPane symbol={selected} ticker={state.data[selected]} />
+      <div className="flex-1 min-w-0 flex flex-col h-full">
+        <ChartPane symbol={selected} ticker={state.data[selected]} />
+        <ResultPanel
+          question={query.question}
+          answer={query.answer}
+          error={query.error}
+          onDismiss={clearQuery}
+        />
+        <QueryBar
+          ref={queryInputRef}
+          onSubmit={submitQuery}
+          loading={query.loading}
+        />
+      </div>
     </div>
   )
 }
