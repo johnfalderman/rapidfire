@@ -148,24 +148,13 @@ export default function App() {
 
   const [selected, setSelected] = useState(null)
 
-  // Default / recover selection whenever the visible list changes. Prefer the
-  // current selection if it's still visible; otherwise fall back to the first
-  // visible row. If nothing is visible we leave `selected` alone so flipping
-  // filters off restores the prior chart.
-  useEffect(() => {
-    if (!visibleSymbols.length) return
-    if (!selected || !visibleSymbols.includes(selected)) {
-      setSelected(visibleSymbols[0])
-      // A filter-driven switch ought to clear stale markers the same way an
-      // explicit click does — marker indices only make sense for their ticker.
-      clearQuery()
-    }
-  }, [visibleSymbols, selected, clearQuery])
-
   // ---- Timeframe ----
   const [timeframe, setTimeframe] = useState(DEFAULT_TIMEFRAME)
 
   // ---- Claude query state ----
+  // Declared BEFORE the selection-recovery effect so `clearQuery` exists
+  // when that effect closes over it — otherwise prod builds trip a
+  // temporal-dead-zone error on the minified const.
   const [query, setQuery] = useState({
     question: null,
     answer: null,
@@ -189,6 +178,20 @@ export default function App() {
       matches: [],
     })
   }, [])
+
+  // Default / recover selection whenever the visible list changes. Prefer the
+  // current selection if it's still visible; otherwise fall back to the first
+  // visible row. If nothing is visible we leave `selected` alone so flipping
+  // filters off restores the prior chart.
+  useEffect(() => {
+    if (!visibleSymbols.length) return
+    if (!selected || !visibleSymbols.includes(selected)) {
+      setSelected(visibleSymbols[0])
+      // A filter-driven switch ought to clear stale markers the same way an
+      // explicit click does — marker indices only make sense for their ticker.
+      clearQuery()
+    }
+  }, [visibleSymbols, selected, clearQuery])
 
   const submitQuery = useCallback(
     async (question) => {
