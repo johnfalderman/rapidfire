@@ -4,11 +4,12 @@ import ChartPane from './components/ChartPane.jsx'
 import QueryBar from './components/QueryBar.jsx'
 import ResultPanel from './components/ResultPanel.jsx'
 import { tickers as TICKERS_META } from './data/tickers.js'
-import { barsForTimeframe, TIMEFRAMES } from './lib/series.js'
+import { barsForTimeframe, changePctForTimeframe, TIMEFRAMES } from './lib/series.js'
 import { askClaude } from './lib/claude.js'
 import { computeSummaries } from './lib/summary.js'
 import { detectForQuery } from './lib/queryRouter.js'
 import { matchesToMarkers } from './lib/patternMarkers.js'
+import { momentumFlags } from './lib/momentum.js'
 
 const WATCHLIST_KEY = 'sp100-watchlist'
 const DEFAULT_TIMEFRAME = '6M'
@@ -24,6 +25,38 @@ function loadWatchlist() {
     return new Set(Array.isArray(arr) ? arr : [])
   } catch {
     return new Set()
+  }
+}
+
+// Sort symbols by the chosen dimension. 'default' preserves whatever order
+// the caller passed in (i.e. the canonical tickers.js order). Tickers missing
+// metrics fall to the bottom so a half-loaded data state doesn't crash sort.
+function sortSymbols(symbols, sort, metrics) {
+  if (!sort || sort === 'default') return symbols
+  const arr = symbols.slice()
+  const get = (sym) => metrics?.[sym]
+  const valueOr = (n, fallback) => (Number.isFinite(n) ? n : fallback)
+  switch (sort) {
+    case 'alpha':
+      return arr.sort((a, b) => a.localeCompare(b))
+    case 'gainers':
+      return arr.sort(
+        (a, b) =>
+          valueOr(get(b)?.pct, -Infinity) - valueOr(get(a)?.pct, -Infinity),
+      )
+    case 'losers':
+      return arr.sort(
+        (a, b) =>
+          valueOr(get(a)?.pct, Infinity) - valueOr(get(b)?.pct, Infinity),
+      )
+    case 'volume':
+      return arr.sort(
+        (a, b) =>
+          valueOr(get(b)?.volume, -Infinity) -
+          valueOr(get(a)?.volume, -Infinity),
+      )
+    default:
+      return arr
   }
 }
 
@@ -116,6 +149,19 @@ export default function App() {
   const [sector, setSector] = useState('All')
   const [watchlistOnly, setWatchlistOnly] = useState(false)
   const [watchlist, setWatchlist] = useState(loadWatchlist)
+  const [sort, setSort] = useState('default')
+  // Momentum chip filters held as a Set of keys ('above50', 'below50', 'high52', 'low52').
+  // Multi-select with OR semantics — any chip on means "at least one qualifies".
+  const [momentum, setMomentum] = useState(() => new Set())
+
+  const toggleMomentum = useCallback((key) => {
+    setMomentum((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
 
   const toggleStar = useCallback((sym) => {
     setWatchlist((prev) => {
@@ -131,25 +177,69 @@ export default function App() {
     })
   }, [])
 
+  // ---- Timeframe ----
+  // Hoisted above visibleSymbols because metrics uses it.
+  const [timeframe, setTimeframe] = useState(DEFAULT_TIMEFRAME)
+
+  // Per-ticker derived numbers used by both the sidebar and the keyboard nav
+  // filter. Recomputed when data or timeframe changes — momentum + volume
+  // don't actually depend on timeframe but the cost is trivial (~100 tickers
+  // × 252 bars) and keeping one memo simplifies prop wiring.
+  const metrics = useMemo(() => {
+    const out = {}
+    if (!state.data) return out
+    for (const sym of symbols) {
+      const bars = state.data[sym]?.bars
+      if (!bars?.length) continue
+      out[sym] = {
+        pct: changePctForTimeframe(bars, timeframe),
+        volume: bars[bars.length - 1].v ?? 0,
+        flags: momentumFlags(bars),
+      }
+    }
+    return out
+  }, [state.data, symbols, timeframe])
+
   // Same filter logic the sidebar applies internally. Reproduced here so
   // J/K/←/→ keyboard nav walks the filtered list, not the raw symbol set —
   // otherwise the user could "navigate" onto a hidden row.
   const visibleSymbols = useMemo(() => {
     const q = search.trim().toLowerCase()
-    return symbols.filter((sym) => {
+    const momentumActive = momentum.size > 0
+    const filtered = symbols.filter((sym) => {
       const m = meta[sym]
       if (sector && sector !== 'All' && m?.sector !== sector) return false
       if (watchlistOnly && !watchlist.has(sym)) return false
+      if (momentumActive) {
+        const flags = metrics[sym]?.flags
+        if (!flags) return false
+        let any = false
+        for (const k of momentum) {
+          if (flags[k]) {
+            any = true
+            break
+          }
+        }
+        if (!any) return false
+      }
       if (!q) return true
       const name = m?.name?.toLowerCase() || ''
       return sym.toLowerCase().includes(q) || name.includes(q)
     })
-  }, [symbols, meta, search, sector, watchlistOnly, watchlist])
+    return sortSymbols(filtered, sort, metrics)
+  }, [
+    symbols,
+    meta,
+    search,
+    sector,
+    watchlistOnly,
+    watchlist,
+    momentum,
+    metrics,
+    sort,
+  ])
 
   const [selected, setSelected] = useState(null)
-
-  // ---- Timeframe ----
-  const [timeframe, setTimeframe] = useState(DEFAULT_TIMEFRAME)
 
   // ---- Claude query state ----
   // Declared BEFORE the selection-recovery effect so `clearQuery` exists
@@ -400,14 +490,15 @@ export default function App() {
         watchlist={watchlist}
         watchlistOnly={watchlistOnly}
         onWatchlistOnlyChange={setWatchlistOnly}
+        updated={state.updated}
         loading={loading}
       />
 
       <div className="hidden md:flex h-full">
         <TickerSidebar
           ref={searchInputRef}
-          symbols={symbols}
-          data={state.data}
+          symbols={visibleSymbols}
+          metrics={metrics}
           meta={meta}
           selected={selected}
           onSelect={selectTicker}
@@ -420,6 +511,11 @@ export default function App() {
           onToggleStar={toggleStar}
           watchlistOnly={watchlistOnly}
           onWatchlistOnlyChange={setWatchlistOnly}
+          sort={sort}
+          onSortChange={setSort}
+          momentum={momentum}
+          onToggleMomentum={toggleMomentum}
+          updated={state.updated}
           loading={loading}
         />
       </div>
@@ -473,6 +569,7 @@ function MobileTopBar({
   watchlist,
   watchlistOnly,
   onWatchlistOnlyChange,
+  updated,
   loading,
 }) {
   const tickerOptions = visibleSymbols.length ? visibleSymbols : symbols
@@ -530,6 +627,17 @@ function MobileTopBar({
           <span className="ml-auto text-zinc-500">{watchlist.size}</span>
         )}
       </label>
+      {updated && (
+        <p className="text-[10px] text-zinc-500 num">
+          Data as of{' '}
+          {new Date(updated).toLocaleString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+          })}
+        </p>
+      )}
     </div>
   )
 }
