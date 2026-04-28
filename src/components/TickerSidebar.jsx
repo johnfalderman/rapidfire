@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useRef } from 'react'
+import { forwardRef, useEffect, useRef, useState } from 'react'
 import { MOMENTUM_FILTERS } from '../lib/momentum.js'
 
 const SORT_OPTIONS = [
@@ -32,6 +32,9 @@ const TickerSidebar = forwardRef(function TickerSidebar(
     onSortChange,
     momentum,
     onToggleMomentum,
+    onAddTicker,
+    onRemoveTicker,
+    addState,
     updated,
     loading,
   },
@@ -39,6 +42,22 @@ const TickerSidebar = forwardRef(function TickerSidebar(
 ) {
   const listRef = useRef(null)
   const itemRefs = useRef({})
+
+  // Inline add-ticker form. Collapsed by default; expands when the user hits
+  // "+" so it doesn't take space when not in use. The submit handler is
+  // owned by App — we just collect the value and forward it.
+  const [addOpen, setAddOpen] = useState(false)
+  const [addValue, setAddValue] = useState('')
+
+  const submitAdd = async (e) => {
+    e?.preventDefault?.()
+    if (!addValue.trim() || !onAddTicker) return
+    const ok = await onAddTicker(addValue)
+    if (ok) {
+      setAddValue('')
+      setAddOpen(false)
+    }
+  }
 
   // Auto-scroll the selected row into view (center-ish), e.g. on J/K nav.
   useEffect(() => {
@@ -53,9 +72,57 @@ const TickerSidebar = forwardRef(function TickerSidebar(
   return (
     <aside className="w-[220px] shrink-0 bg-zinc-950 border-r border-zinc-800 flex flex-col h-full">
       <div className="px-4 py-3 border-b border-zinc-800 space-y-2">
-        <h2 className="text-[11px] tracking-[0.15em] uppercase text-zinc-500 font-medium">
-          Tickers
-        </h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-[11px] tracking-[0.15em] uppercase text-zinc-500 font-medium">
+            Tickers
+          </h2>
+          <button
+            type="button"
+            onClick={() => setAddOpen((v) => !v)}
+            aria-label={addOpen ? 'Cancel add' : 'Add ticker'}
+            className="text-zinc-500 hover:text-zinc-200 text-sm leading-none w-5 h-5 flex items-center justify-center rounded"
+            title="Add ticker"
+          >
+            {addOpen ? '×' : '+'}
+          </button>
+        </div>
+
+        {addOpen && (
+          <form onSubmit={submitAdd} className="space-y-1">
+            <div className="flex gap-1">
+              <input
+                autoFocus
+                type="text"
+                value={addValue}
+                onChange={(e) => setAddValue(e.target.value.toUpperCase())}
+                placeholder="e.g. NFLX"
+                disabled={addState?.loading}
+                aria-label="New ticker symbol"
+                className={[
+                  'flex-1 bg-zinc-900 border border-zinc-800 rounded-md px-2 py-1.5',
+                  'text-xs text-zinc-100 placeholder:text-zinc-500 uppercase',
+                  'focus:outline-none focus:border-zinc-600',
+                  'disabled:opacity-60',
+                ].join(' ')}
+              />
+              <button
+                type="submit"
+                disabled={addState?.loading || !addValue.trim()}
+                className={[
+                  'px-2 py-1 rounded-md text-xs border',
+                  'border-zinc-700 bg-zinc-800 text-zinc-200',
+                  'hover:bg-zinc-700 hover:border-zinc-600',
+                  'disabled:opacity-50 disabled:cursor-not-allowed',
+                ].join(' ')}
+              >
+                {addState?.loading ? '…' : 'Add'}
+              </button>
+            </div>
+            {addState?.error && (
+              <p className="text-[10px] text-red-400">{addState.error}</p>
+            )}
+          </form>
+        )}
         <input
           ref={searchRef}
           type="text"
@@ -162,7 +229,7 @@ const TickerSidebar = forwardRef(function TickerSidebar(
                 key={symbol}
                 ref={(el) => (itemRefs.current[symbol] = el)}
                 className={[
-                  'w-full flex items-center',
+                  'group w-full flex items-center',
                   'border-l-2 transition-colors',
                   active
                     ? 'border-zinc-100 bg-zinc-900'
@@ -204,7 +271,7 @@ const TickerSidebar = forwardRef(function TickerSidebar(
                       : `Add ${symbol} to watchlist`
                   }
                   className={[
-                    'w-7 h-7 mr-1 rounded flex items-center justify-center',
+                    'w-6 h-7 rounded flex items-center justify-center',
                     'text-sm leading-none',
                     starred
                       ? 'text-yellow-400 hover:text-yellow-300'
@@ -212,6 +279,27 @@ const TickerSidebar = forwardRef(function TickerSidebar(
                   ].join(' ')}
                 >
                   {starred ? '★' : '☆'}
+                </button>
+                <button
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        `Remove ${symbol} from your tracked list?`,
+                      )
+                    ) {
+                      onRemoveTicker?.(symbol)
+                    }
+                  }}
+                  aria-label={`Remove ${symbol} from tracked list`}
+                  title="Remove from list"
+                  className={[
+                    'w-6 h-7 mr-1 rounded flex items-center justify-center',
+                    'text-xs leading-none',
+                    'opacity-0 group-hover:opacity-100 focus:opacity-100',
+                    'text-zinc-600 hover:text-red-400 transition-opacity',
+                  ].join(' ')}
+                >
+                  ×
                 </button>
               </div>
             )

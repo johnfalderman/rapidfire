@@ -3,28 +3,33 @@ import TickerSidebar from './components/TickerSidebar.jsx'
 import ChartPane from './components/ChartPane.jsx'
 import QueryBar from './components/QueryBar.jsx'
 import ResultPanel from './components/ResultPanel.jsx'
-import { tickers as TICKERS_META } from './data/tickers.js'
 import { barsForTimeframe, changePctForTimeframe, TIMEFRAMES } from './lib/series.js'
 import { askClaude } from './lib/claude.js'
 import { computeSummaries } from './lib/summary.js'
 import { detectForQuery } from './lib/queryRouter.js'
 import { matchesToMarkers } from './lib/patternMarkers.js'
 import { momentumFlags } from './lib/momentum.js'
+import {
+  fetchConfig,
+  saveConfig,
+  addTicker as apiAddTicker,
+  removeTicker as apiRemoveTicker,
+} from './lib/config.js'
 
-const WATCHLIST_KEY = 'sp100-watchlist'
+const WATCHLIST_KEY = 'sp100-watchlist' // legacy localStorage key — read once for migration
 const DEFAULT_TIMEFRAME = '6M'
 
-// Hydrate synchronously so the first render already has the starred set —
-// avoids a flicker where stars briefly look empty. Any localStorage error
-// just falls back to an empty set.
-function loadWatchlist() {
+// Read any pre-server-config localStorage watchlist so existing users don't
+// lose their stars when we flip persistence to the server. Once seeded into
+// the config blob the local copy is purged.
+function loadLegacyWatchlist() {
   try {
     const raw = localStorage.getItem(WATCHLIST_KEY)
-    if (!raw) return new Set()
+    if (!raw) return []
     const arr = JSON.parse(raw)
-    return new Set(Array.isArray(arr) ? arr : [])
+    return Array.isArray(arr) ? arr : []
   } catch {
-    return new Set()
+    return []
   }
 }
 
@@ -69,33 +74,83 @@ export default function App() {
     updated: null,
     message: null,
   })
+  const [config, setConfig] = useState(null)
+
+  // Refetch helper — used after add/remove ticker so the chart sees fresh
+  // bars without a full page reload.
+  const refetchData = useCallback(async () => {
+    const r = await fetch('/.netlify/functions/get-data')
+    const json = await r.json()
+    if (json.status === 'ok') {
+      setState({
+        status: 'ready',
+        data: json.tickers,
+        updated: json.updated,
+        message: null,
+      })
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
-    fetch('/.netlify/functions/get-data')
-      .then((r) => r.json())
-      .then((json) => {
+
+    // Parallel fetch — config + data. Both are required for first paint.
+    const dataPromise = fetch('/.netlify/functions/get-data').then((r) => r.json())
+    const configPromise = fetchConfig().catch((err) => ({ __err: err }))
+
+    Promise.all([dataPromise, configPromise])
+      .then(async ([dataJson, cfg]) => {
         if (cancelled) return
-        if (json.status === 'ok') {
+
+        // Config first — failure is fatal because the universe is unknown.
+        if (cfg?.__err) {
+          setState({
+            status: 'error',
+            data: null,
+            updated: null,
+            message: `Config: ${cfg.__err.message || 'unreachable'}`,
+          })
+          return
+        }
+
+        // One-time migration of the localStorage watchlist into the server
+        // config. Only runs if server is empty AND local has entries — once
+        // the server "wins" we drop the local copy.
+        const legacy = loadLegacyWatchlist()
+        let live = cfg
+        if ((!cfg.watchlist || cfg.watchlist.length === 0) && legacy.length) {
+          try {
+            live = await saveConfig({ watchlist: legacy })
+          } catch {
+            // Server save failed — keep using returned cfg, retry next session.
+          }
+          try {
+            localStorage.removeItem(WATCHLIST_KEY)
+          } catch {}
+        }
+        setConfig(live)
+
+        // Now data.
+        if (dataJson.status === 'ok') {
           setState({
             status: 'ready',
-            data: json.tickers,
-            updated: json.updated,
+            data: dataJson.tickers,
+            updated: dataJson.updated,
             message: null,
           })
-        } else if (json.status === 'empty') {
+        } else if (dataJson.status === 'empty') {
           setState({
             status: 'empty',
             data: null,
             updated: null,
-            message: json.message,
+            message: dataJson.message,
           })
         } else {
           setState({
             status: 'error',
             data: null,
             updated: null,
-            message: json.message || 'Unknown error',
+            message: dataJson.message || 'Unknown error',
           })
         }
       })
@@ -109,32 +164,39 @@ export default function App() {
           })
         }
       })
+
     return () => {
       cancelled = true
     }
   }, [])
 
-  // Canonical sidebar order — preserves tickers.js ordering across reloads,
-  // and skips any symbol that came back empty from Polygon.
+  // Tracked universe is whatever the user has curated in config.trackedTickers
+  // (server-side, persistent across sessions and devices). Skip rows that
+  // don't have bars yet — a freshly-added ticker shows up immediately because
+  // add-ticker writes its bars before returning.
+  const trackedTickers = config?.trackedTickers ?? []
+
   const symbols = useMemo(() => {
     if (!state.data) return []
-    return TICKERS_META.map((t) => t.symbol).filter(
-      (sym) => state.data[sym]?.bars?.length > 1,
-    )
-  }, [state.data])
+    return trackedTickers
+      .map((t) => t.symbol)
+      .filter((sym) => state.data[sym]?.bars?.length > 1)
+  }, [state.data, trackedTickers])
 
   // Quick lookup for sector filter + sidebar rows that need `name`/`sector`
   // independent of the loaded bar data.
   const meta = useMemo(() => {
     const out = {}
-    for (const t of TICKERS_META) out[t.symbol] = { name: t.name, sector: t.sector }
+    for (const t of trackedTickers) {
+      out[t.symbol] = { name: t.name, sector: t.sector }
+    }
     return out
-  }, [])
+  }, [trackedTickers])
 
   const sectors = useMemo(() => {
-    const set = new Set(TICKERS_META.map((t) => t.sector).filter(Boolean))
+    const set = new Set(trackedTickers.map((t) => t.sector).filter(Boolean))
     return Array.from(set).sort()
-  }, [])
+  }, [trackedTickers])
 
   // Cross-ticker context for Claude — computed once per data load and reused
   // across every query so market-wide questions ("which sectors held up?")
@@ -145,14 +207,34 @@ export default function App() {
   )
 
   // ---- Filters ----
+  // Search is intentionally local-only — typing shouldn't pulse the server.
   const [search, setSearch] = useState('')
+  // Other filters seed from the server config when it lands. We use a single
+  // hydration effect (below) so we don't re-init when the server config
+  // updates from our own writes.
   const [sector, setSector] = useState('All')
   const [watchlistOnly, setWatchlistOnly] = useState(false)
-  const [watchlist, setWatchlist] = useState(loadWatchlist)
+  const [watchlist, setWatchlist] = useState(() => new Set())
   const [sort, setSort] = useState('default')
   // Momentum chip filters held as a Set of keys ('above50', 'below50', 'high52', 'low52').
   // Multi-select with OR semantics — any chip on means "at least one qualifies".
   const [momentum, setMomentum] = useState(() => new Set())
+
+  // Hydrate from server config on first arrival. The `hydratedRef` guard
+  // means subsequent saves (which return updated configs) don't blow away
+  // user's in-flight UI changes.
+  const hydratedRef = useRef(false)
+  useEffect(() => {
+    if (!config || hydratedRef.current) return
+    hydratedRef.current = true
+    setWatchlist(new Set(config.watchlist || []))
+    const p = config.preferences || {}
+    if (p.sector) setSector(p.sector)
+    if (typeof p.watchlistOnly === 'boolean') setWatchlistOnly(p.watchlistOnly)
+    if (p.sort) setSort(p.sort)
+    if (p.timeframe) setTimeframe(p.timeframe)
+    if (p.lastSelected) setSelected(p.lastSelected)
+  }, [config])
 
   const toggleMomentum = useCallback((key) => {
     setMomentum((prev) => {
@@ -163,16 +245,17 @@ export default function App() {
     })
   }, [])
 
+  // Optimistic toggle — UI updates immediately, server save runs in background.
+  // A failed save logs but doesn't roll back; the user's intent is what matters
+  // and they'll see the corrected state next session.
   const toggleStar = useCallback((sym) => {
     setWatchlist((prev) => {
       const next = new Set(prev)
       if (next.has(sym)) next.delete(sym)
       else next.add(sym)
-      try {
-        localStorage.setItem(WATCHLIST_KEY, JSON.stringify(Array.from(next)))
-      } catch {
-        // localStorage blocked — keep the in-memory state working anyway.
-      }
+      saveConfig({ watchlist: Array.from(next) }).catch((err) =>
+        console.warn('saveConfig watchlist failed', err),
+      )
       return next
     })
   }, [])
@@ -268,6 +351,69 @@ export default function App() {
       matches: [],
     })
   }, [])
+
+  // Persist preference changes back to the server. Debounced so a fast click
+  // through timeframes or sectors doesn't fire a request per click. Skipped
+  // until hydration completes to avoid echoing the just-loaded values back.
+  useEffect(() => {
+    if (!hydratedRef.current) return
+    const t = setTimeout(() => {
+      saveConfig({
+        preferences: {
+          sort,
+          sector,
+          watchlistOnly,
+          timeframe,
+          lastSelected: selected,
+        },
+      }).catch((err) => console.warn('saveConfig prefs failed', err))
+    }, 800)
+    return () => clearTimeout(t)
+  }, [sort, sector, watchlistOnly, timeframe, selected])
+
+  // Add-ticker UX state. The sidebar opens an inline input that submits to
+  // this handler; we surface its loading + error states back so the input can
+  // show feedback without owning the network call.
+  const [addState, setAddState] = useState({ loading: false, error: null })
+  const addNewTicker = useCallback(
+    async (rawSymbol) => {
+      const sym = (rawSymbol || '').trim().toUpperCase()
+      if (!sym) return
+      setAddState({ loading: true, error: null })
+      try {
+        const json = await apiAddTicker(sym)
+        setConfig(json.config)
+        // Pull fresh bars so the new ticker has data on its first paint.
+        await refetchData()
+        setSelected(json.ticker.symbol)
+        clearQuery()
+        setAddState({ loading: false, error: null })
+        return true
+      } catch (err) {
+        setAddState({
+          loading: false,
+          error: err?.message || 'Add failed',
+        })
+        return false
+      }
+    },
+    [refetchData, clearQuery],
+  )
+
+  const removeFromList = useCallback(
+    async (sym) => {
+      try {
+        const json = await apiRemoveTicker(sym)
+        setConfig(json.config)
+        await refetchData()
+        // The selection-recovery effect will jump to a still-visible ticker
+        // automatically — no need to setSelected here.
+      } catch (err) {
+        console.warn('removeTicker failed', err)
+      }
+    },
+    [refetchData],
+  )
 
   // Default / recover selection whenever the visible list changes. Prefer the
   // current selection if it's still visible; otherwise fall back to the first
@@ -515,6 +661,9 @@ export default function App() {
           onSortChange={setSort}
           momentum={momentum}
           onToggleMomentum={toggleMomentum}
+          onAddTicker={addNewTicker}
+          onRemoveTicker={removeFromList}
+          addState={addState}
           updated={state.updated}
           loading={loading}
         />

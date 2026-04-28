@@ -1,41 +1,25 @@
-import { getStore } from '@netlify/blobs'
-import { tickers } from '../../src/data/tickers.js'
+import {
+  CACHE_KEY,
+  aggregateWindow,
+  getRapidfireStore,
+  normalizeBars,
+  readConfig,
+} from './_lib.js'
 
 // Netlify background functions get a 15-minute ceiling. Polygon free tier is
 // 5 req/min → 13s/call with headroom → ~40 tickers per batch comfortably
 // fits in 15 min (40 * 13s = 520s) and leaves room for slow responses and
-// cold-start overhead. Three batches cover all 101 S&P 100 tickers.
+// cold-start overhead. Three batches cover 100+ tickers; if the user adds
+// many custom symbols and pushes past the limit, we'll bump batch count or
+// add a fourth scheduled run.
 const BATCH_SIZE = 40
 const DELAY_MS = 13_000
-const LOOKBACK_DAYS = 400
-const PROGRESS_KEY = 'sp100-progress'
-const CACHE_KEY = 'sp100'
+const PROGRESS_KEY = 'sp100-progress' // legacy key name; stays put for resume continuity
 // A partial seed older than a day means something went wrong — don't resume,
 // start over so we don't accumulate stale half-runs.
 const PROGRESS_STALE_MS = 24 * 60 * 60 * 1000
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const ymd = (d) => d.toISOString().slice(0, 10)
-
-function windowDates() {
-  const to = new Date()
-  const from = new Date(to)
-  from.setUTCDate(from.getUTCDate() - LOOKBACK_DAYS)
-  return { from: ymd(from), to: ymd(to) }
-}
-
-// Compact single-letter keys keep the cached JSON small — sp100.json is the
-// hot path for the client.
-function normalizeBars(results) {
-  return (results || []).map((r) => ({
-    t: ymd(new Date(r.t)),
-    o: r.o,
-    h: r.h,
-    l: r.l,
-    c: r.c,
-    v: r.v,
-  }))
-}
 
 async function fetchTicker(symbol, from, to, apiKey) {
   const url =
@@ -58,8 +42,17 @@ export default async () => {
     return new Response('POLYGON_API_KEY not set', { status: 500 })
   }
 
-  const store = getStore('rapidfire')
-  const { from, to } = windowDates()
+  const store = getRapidfireStore()
+  const { from, to } = aggregateWindow(400)
+
+  // Universe = whatever the user has curated in user-config. readConfig seeds
+  // from S&P 100 on first run, so this still works on a fresh deploy.
+  const config = await readConfig(store)
+  const tickers = config.trackedTickers
+  if (!Array.isArray(tickers) || !tickers.length) {
+    console.warn('[refresh-data-background] tracked list empty; nothing to do')
+    return new Response('Tracked list empty', { status: 200 })
+  }
 
   // Resume-or-restart: progress from a previous run gets picked back up
   // unless it's too old to trust.
@@ -152,6 +145,6 @@ export default async () => {
 
 export const config = {
   // Three tight runs overnight (02:00, 03:00, 04:00 UTC) — one batch each —
-  // so all 101 tickers refresh every day even if a single run hiccups.
+  // covers up to 120 tickers per night.
   schedule: '0 2,3,4 * * *',
 }
