@@ -5,12 +5,18 @@ import {
   barsToCandles,
   barsToVolume,
   changePctForTimeframe,
+  smaSeries,
   TIMEFRAMES,
 } from '../lib/series.js'
 
 // Shared greens/reds — keep candles and volume visually in sync.
 const UP = '#22c55e' // green-500
 const DOWN = '#ef4444' // red-500
+// MA line palette — chosen to read against dark bg without competing with
+// red/green candles. Amber for the faster line (50d) keeps the warm/fast vs.
+// cool/slow convention many traders are used to.
+const MA50 = '#fbbf24' // amber-400
+const MA200 = '#38bdf8' // sky-400
 
 // Helpers for formatting numbers across the header / footer.
 const fmtPrice = (n) =>
@@ -52,6 +58,13 @@ export default function ChartPane({
     return barsToVolume(barsForTimeframe(ticker.bars, tf), UP, DOWN)
   }, [ticker, tf])
 
+  // SMAs computed on the FULL bar series so the line is continuous across
+  // the visible window — points outside the window get clipped by the time
+  // axis automatically. 200d only renders for tickers with >=200 bars (most
+  // of the S&P 100; freshly-added small-caps may briefly lack it).
+  const sma50 = useMemo(() => smaSeries(ticker?.bars ?? [], 50), [ticker])
+  const sma200 = useMemo(() => smaSeries(ticker?.bars ?? [], 200), [ticker])
+
   const pct = useMemo(
     () => changePctForTimeframe(ticker?.bars ?? [], tf),
     [ticker, tf],
@@ -69,6 +82,8 @@ export default function ChartPane({
   const chartRef = useRef(null)
   const seriesRef = useRef(null)
   const volumeRef = useRef(null)
+  const sma50Ref = useRef(null)
+  const sma200Ref = useRef(null)
 
   // Create chart once. Volume histogram lives on its own overlay price scale
   // so the candles keep their full vertical range, with the volume bars
@@ -119,9 +134,29 @@ export default function ChartPane({
       borderVisible: false,
     })
 
+    // Moving averages. Both lines share the candles' price scale (no overlay)
+    // and stay subtle: thin stroke, no last-value badge, no crosshair label —
+    // those would all clutter the chart and steal attention from the candles.
+    const sma50Line = chart.addLineSeries({
+      color: MA50,
+      lineWidth: 1.5,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    })
+    const sma200Line = chart.addLineSeries({
+      color: MA200,
+      lineWidth: 1.5,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    })
+
     chartRef.current = chart
     seriesRef.current = series
     volumeRef.current = volume
+    sma50Ref.current = sma50Line
+    sma200Ref.current = sma200Line
 
     const handleCrosshair = (param) => {
       if (!param || !param.time) {
@@ -142,6 +177,8 @@ export default function ChartPane({
       chartRef.current = null
       seriesRef.current = null
       volumeRef.current = null
+      sma50Ref.current = null
+      sma200Ref.current = null
     }
   }, [])
 
@@ -157,6 +194,14 @@ export default function ChartPane({
     setHovered(null)
     setHoveredVol(null)
   }, [candles, volumes])
+
+  // MAs only refresh when the ticker changes — the line is precomputed on
+  // the full bar series, and lightweight-charts handles clipping for whatever
+  // window is visible.
+  useEffect(() => {
+    if (sma50Ref.current) sma50Ref.current.setData(sma50)
+    if (sma200Ref.current) sma200Ref.current.setData(sma200)
+  }, [sma50, sma200])
 
   // Pattern markers. lightweight-charts wants them sorted ascending
   // by time and matched to existing bar times — anything outside the
@@ -239,6 +284,10 @@ export default function ChartPane({
             </button>
           )
         })}
+        <span className="ml-3 hidden sm:flex items-center gap-3 text-[11px] text-zinc-500">
+          <MaSwatch color={MA50} label="50d MA" />
+          <MaSwatch color={MA200} label="200d MA" />
+        </span>
         <span className="ml-auto hidden md:inline text-[11px] text-zinc-500">
           <Kbd>↑</Kbd> <Kbd>↓</Kbd> to cycle
         </span>
@@ -280,6 +329,19 @@ function OhlcCell({ label, value }) {
     <span className="flex items-baseline gap-1">
       <span className="text-zinc-500">{label}</span>
       <span className="text-zinc-200">{fmtPrice(value)}</span>
+    </span>
+  )
+}
+
+function MaSwatch({ color, label }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span
+        aria-hidden
+        className="inline-block w-3 h-[2px] rounded-sm"
+        style={{ backgroundColor: color }}
+      />
+      <span>{label}</span>
     </span>
   )
 }

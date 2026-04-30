@@ -169,7 +169,7 @@ const TickerSidebar = forwardRef(function TickerSidebar(
         </select>
 
         {/* Momentum chips: multi-select OR. */}
-        <div className="flex flex-wrap gap-1 pt-0.5">
+        <div className="flex flex-wrap gap-1.5 pt-0.5">
           {MOMENTUM_FILTERS.map(({ key, label, title }) => {
             const on = momentum?.has(key)
             return (
@@ -179,10 +179,10 @@ const TickerSidebar = forwardRef(function TickerSidebar(
                 onClick={() => onToggleMomentum?.(key)}
                 title={title}
                 className={[
-                  'px-1.5 py-0.5 text-[10px] rounded-md border transition-colors',
+                  'px-2 py-1 text-xs font-medium rounded-md border transition-colors',
                   on
-                    ? 'border-yellow-500/60 bg-yellow-500/10 text-yellow-200'
-                    : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-zinc-200',
+                    ? 'border-yellow-400/70 bg-yellow-400/15 text-yellow-100'
+                    : 'border-zinc-700 bg-zinc-800/70 text-zinc-200 hover:bg-zinc-700 hover:border-zinc-600',
                 ].join(' ')}
               >
                 {label}

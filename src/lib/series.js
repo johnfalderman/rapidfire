@@ -49,6 +49,24 @@ export function barsToCandles(bars) {
   }))
 }
 
+// Rolling simple moving average over close prices. Returns lightweight-charts
+// line points ({ time, value }) for the bars where a full window is available
+// — the first n-1 bars are skipped so the line only starts where the math is
+// honest. We compute on the FULL bar series the caller passes in, so even on
+// a 1M chart view the 200d line still has values pulled from history outside
+// the visible window.
+export function smaSeries(bars, n) {
+  if (!Array.isArray(bars) || bars.length < n) return []
+  const out = []
+  let sum = 0
+  for (let i = 0; i < bars.length; i++) {
+    sum += bars[i].c
+    if (i >= n) sum -= bars[i - n].c
+    if (i >= n - 1) out.push({ time: bars[i].t, value: sum / n })
+  }
+  return out
+}
+
 // lightweight-charts histogram series for volume. Colour per bar so up/down
 // days read at a glance without a second series.
 export function barsToVolume(bars, upColor, downColor) {
