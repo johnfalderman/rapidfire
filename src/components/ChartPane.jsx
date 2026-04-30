@@ -58,12 +58,18 @@ export default function ChartPane({
     return barsToVolume(barsForTimeframe(ticker.bars, tf), UP, DOWN)
   }, [ticker, tf])
 
-  // SMAs computed on the FULL bar series so the line is continuous across
-  // the visible window — points outside the window get clipped by the time
-  // axis automatically. 200d only renders for tickers with >=200 bars (most
-  // of the S&P 100; freshly-added small-caps may briefly lack it).
-  const sma50 = useMemo(() => smaSeries(ticker?.bars ?? [], 50), [ticker])
-  const sma200 = useMemo(() => smaSeries(ticker?.bars ?? [], 200), [ticker])
+  // SMAs computed on the FULL bar series so values are honest, then clipped
+  // to the visible timeframe window. Without the clip, lightweight-charts'
+  // fitContent stretches the time axis to span the whole MA range — squashing
+  // the candles into a sliver on the right when the user picks 1M / 3M.
+  const sma50 = useMemo(
+    () => clipToWindow(smaSeries(ticker?.bars ?? [], 50), ticker?.bars, tf),
+    [ticker, tf],
+  )
+  const sma200 = useMemo(
+    () => clipToWindow(smaSeries(ticker?.bars ?? [], 200), ticker?.bars, tf),
+    [ticker, tf],
+  )
 
   const pct = useMemo(
     () => changePctForTimeframe(ticker?.bars ?? [], tf),
@@ -331,6 +337,17 @@ function OhlcCell({ label, value }) {
       <span className="text-zinc-200">{fmtPrice(value)}</span>
     </span>
   )
+}
+
+// Trim an SMA point list down to the timeframe window. Points use ISO
+// 'YYYY-MM-DD' strings so a lexical compare against the slice's first bar
+// time is enough — no Date construction needed.
+function clipToWindow(points, fullBars, tf) {
+  if (!points?.length || !fullBars?.length) return points || []
+  const slice = barsForTimeframe(fullBars, tf)
+  if (!slice.length) return points
+  const startTime = slice[0].t
+  return points.filter((p) => p.time >= startTime)
 }
 
 function MaSwatch({ color, label }) {
