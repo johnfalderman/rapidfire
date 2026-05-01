@@ -231,9 +231,27 @@ export default function ChartPane({
 
   return (
     <section className="flex-1 min-w-0 flex flex-col h-full">
-      {/* Header strip */}
+      {/* Header strip — price/perf on the left, ticker on the right so it
+          sits over the recent candles where the eye lands first. */}
       <header className="px-4 md:px-8 py-4 md:py-6 border-b border-zinc-800 flex flex-wrap items-baseline gap-x-6 gap-y-2">
-        <div className="flex items-baseline gap-2">
+        <div className="flex items-baseline gap-4 md:gap-6">
+          <span className="num text-xl md:text-2xl font-semibold text-zinc-50">
+            ${fmtPrice(last?.close)}
+          </span>
+          <span
+            className={[
+              'num text-sm font-medium',
+              up ? 'text-green-500' : 'text-red-500',
+            ].join(' ')}
+          >
+            {fmtPct(pct)}{' '}
+            <span className="text-zinc-500 font-normal">{tf}</span>
+          </span>
+        </div>
+        <div className="ml-auto flex items-baseline gap-2">
+          <span className="text-sm text-zinc-400 hidden sm:inline mr-2">
+            {ticker?.name}
+          </span>
           <h1 className="text-xl md:text-2xl font-semibold tracking-tight text-zinc-50">
             {symbol}
           </h1>
@@ -251,23 +269,6 @@ export default function ChartPane({
           >
             {starred ? '★' : '☆'}
           </button>
-          <span className="text-sm text-zinc-400 hidden sm:inline ml-2">
-            {ticker?.name}
-          </span>
-        </div>
-        <div className="ml-auto flex items-baseline gap-4 md:gap-6">
-          <span className="num text-xl md:text-2xl font-semibold text-zinc-50">
-            ${fmtPrice(last?.close)}
-          </span>
-          <span
-            className={[
-              'num text-sm font-medium',
-              up ? 'text-green-500' : 'text-red-500',
-            ].join(' ')}
-          >
-            {fmtPct(pct)}{' '}
-            <span className="text-zinc-500 font-normal">{tf}</span>
-          </span>
         </div>
       </header>
 
